@@ -9,10 +9,18 @@
 
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
+using Eigen::Matrix;
+template <size_t N>
+using VectorD = Eigen::Matrix<double, N, 1>;
+
+template <size_t N, size_t N2=N>
+using MatrixD = Eigen::Matrix<double, N, N2>;
 
 class UKF
 {
 public:
+    static constexpr size_t N_X = 5;
+    static constexpr size_t N_AUG = 7;
 
     ///* initially set to false, set to true in first call of ProcessMeasurement
     bool is_initialized_;
@@ -24,13 +32,13 @@ public:
     bool use_radar_;
 
     ///* state vector: [pos1 pos2 vel_abs yaw_angle yaw_rate] in SI units and rad
-    VectorXd x_;
+    VectorD<N_X> x_;
 
     ///* state covariance matrix
-    MatrixXd P_;
+    MatrixD<N_X> P_;
 
     ///* predicted sigma points matrix
-    MatrixXd Xsig_pred_;
+    MatrixD<N_X, 2 * N_X + 1> Xsig_pred_;
 
     ///* time when the state is true, in us
     long long time_us_;
@@ -57,7 +65,7 @@ public:
     double std_radrd_;
 
     ///* Weights of sigma points
-    VectorXd weights_;
+    VectorD<2 * N_X + 1> weights_;
 
     ///* State dimension
     int n_x_;
@@ -78,6 +86,23 @@ public:
      * Destructor
      */
     virtual ~UKF();
+
+    /**
+     *
+     */
+    VectorD<N_X> ProcessModel(VectorD<N_AUG> x, double t);
+
+    /**
+     *
+     * @param x
+     * @return
+     */
+    VectorD<N_AUG> AugmentStateVector(VectorD<N_X> x);
+
+    MatrixD<N_AUG> AugmentStateCovariance(MatrixD<N_X> P);
+
+    MatrixD<N_AUG, 2 * N_X + 1>
+    AugmentedSamplePoints(VectorD<N_AUG> x, MatrixD<N_AUG> P_aug);
 
     /**
      * ProcessMeasurement
