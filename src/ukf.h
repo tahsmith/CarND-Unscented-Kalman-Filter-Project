@@ -67,12 +67,6 @@ public:
     ///* Weights of sigma points
     VectorD<2 * N_X + 1> weights_;
 
-    ///* State dimension
-    int n_x_;
-
-    ///* Augmented state dimension
-    int n_aug_;
-
     ///* Sigma point spreading parameter
     double lambda_;
 
@@ -103,6 +97,8 @@ public:
 
     MatrixD<N_AUG, 2 * N_X + 1>
     AugmentedSamplePoints(VectorD<N_AUG> x, MatrixD<N_AUG> P_aug);
+
+    void KalmanUpdate(MatrixXd S, MatrixXd Zsig_pred, VectorXd z_pred, VectorXd z);
 
     /**
      * ProcessMeasurement

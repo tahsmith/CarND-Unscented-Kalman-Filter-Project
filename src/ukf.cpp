@@ -22,9 +22,11 @@ UKF::UKF()
 
     // initial state vector
     x_ = VectorXd(5);
+    x_.fill(0);
 
     // initial covariance matrix
     P_ = MatrixXd(5, 5);
+    P_.fill(0);
 
     // Process noise standard deviation longitudinal acceleration in m/s^2
     std_a_ = 30;
@@ -47,8 +49,12 @@ UKF::UKF()
     // Radar measurement noise standard deviation radius change in m/s
     std_radrd_ = 0.3;
 
+    lambda_ = 3 - N_AUG;
+    Xsig_pred_.fill(0);
     weights_.setConstant(1 / (lambda_ + N_AUG) / 2.0);
     weights_(0) = lambda_ / (lambda_ + N_AUG);
+
+    time_us_ = 0;
 }
 
 UKF::~UKF()
@@ -60,12 +66,19 @@ UKF::~UKF()
  */
 void UKF::ProcessMeasurement(MeasurementPackage meas_package)
 {
-    /**
-    TODO:
+    if (time_us_ == 0)
+    {
+        time_us_ = meas_package.timestamp_;
+        return;
+    }
 
-    Complete this function! Make sure you switch between lidar and radar
-    measurements.
-    */
+    double dt = (meas_package.timestamp_ - time_us_) / 1e6;
+    time_us_ = meas_package.timestamp_;
+    Prediction(dt);
+    if (meas_package.sensor_type_ == MeasurementPackage::RADAR)
+    {
+        UpdateRadar(meas_package);
+    }
 }
 
 
@@ -137,11 +150,11 @@ MatrixD<UKF::N_AUG, 2 * UKF::N_X + 1> UKF::AugmentedSamplePoints(VectorD<N_AUG> 
     MatrixD<N_AUG, 2 * N_X + 1> Xsig_aug;
     Xsig_aug.col(0) = x_aug;
     double scale = sqrt(lambda_ + N_AUG);
-    for (size_t i = 0; i < N_AUG; ++i)
+    for (size_t i = 0; i < N_X; ++i)
     {
         VectorD<N_AUG> col = A.col(i);
         Xsig_aug.col(i + 1) = x_aug + scale * col;
-        Xsig_aug.col(i + 1 + N_AUG) = x_aug - scale * col;
+        Xsig_aug.col(i + 1 + N_X) = x_aug - scale * col;
     }
     return Xsig_aug;
 }
@@ -178,6 +191,18 @@ void UKF::Prediction(double delta_t)
     P_ = weightedErr * err.transpose();
 }
 
+void UKF::KalmanUpdate(MatrixXd S, MatrixXd Zsig_pred, VectorXd z_pred, VectorXd z)
+{
+    MatrixD<N_X, 2 * N_X + 1> stateError = Xsig_pred_.colwise() - x_;
+    MatrixD<N_X, 2 * N_X + 1> weighedStateError = stateError.array().rowwise() * weights_.transpose().array();
+    MatrixXd measurementError = Zsig_pred.colwise() - z_pred;
+    MatrixXd Tc = weighedStateError * measurementError.transpose();
+
+    MatrixXd K = Tc * S.inverse();
+    x_ += K * (z - z_pred);
+    P_ += - K * S * K.transpose();
+}
+
 /**
  * Updates the state and the state covariance matrix using a laser measurement.
  * @param {MeasurementPackage} meas_package
@@ -200,12 +225,38 @@ void UKF::UpdateLidar(MeasurementPackage meas_package)
  */
 void UKF::UpdateRadar(MeasurementPackage meas_package)
 {
-    /**
-    TODO:
+    using SigmaRow = Eigen::Matrix<double, 1, 2 * N_X + 1>;
+    SigmaRow px = Xsig_pred_.row(0);
+    SigmaRow py = Xsig_pred_.row(1);
+    SigmaRow v = Xsig_pred_.row(2);
+    SigmaRow phi = Xsig_pred_.row(3);
+    SigmaRow phidot = Xsig_pred_.row(4);
 
-    Complete this function! Use radar data to update the belief about the object's
-    position. Modify the state vector, x_, and covariance, P_.
+    SigmaRow rho = (px.cwiseProduct(py) + py.cwiseProduct(py)).array().sqrt();
+    MatrixD<3, 2 * N_X + 1> Zsig_pred;
+    if ((rho.cwiseAbs().array() <= 0.0001).any())
+    {
+        return;
+    }
+    Zsig_pred.row(0) = rho;
+    Zsig_pred.row(1) = py.binaryExpr(px, [] (double y, double x) { return atan2(y, x); });
+    Zsig_pred.row(2) = (px.array() * phi.array().cos() + py.array() * phi.array().sin())
+                       * v.array()
+                       / rho.array();
 
-    You'll also need to calculate the radar NIS.
-    */
+    VectorD<3> z_pred;
+    z_pred = Zsig_pred * weights_;
+    //predict state covariance matrix
+    VectorD<3> R;
+    R <<
+      std_radr_ * std_radr_,
+        std_radphi_ * std_radphi_,
+        std_radrd_ * std_radrd_;
+    MatrixD<3, 2 * N_X + 1> err = Zsig_pred.colwise() - z_pred;
+    MatrixD<3, 2 * N_X + 1> weightedErr = err.array().rowwise() * weights_.transpose().array();
+
+    weightedErr += R.asDiagonal();
+    MatrixD<3, 3> S = weightedErr * err.transpose();
+
+    KalmanUpdate(S, Zsig_pred, z_pred, meas_package.raw_measurements_);
 }
