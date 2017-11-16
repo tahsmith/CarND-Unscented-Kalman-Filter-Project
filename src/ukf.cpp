@@ -6,8 +6,19 @@ using Eigen::Matrix;
 
 using std::vector;
 
+double normaliseSingle(double x)
+{
+    return fmod(x + M_PI, M_PI * 2) - M_PI;
+}
 
-constexpr auto N_X = 5;
+template<typename T>
+auto normalise(const T& matrix) -> decltype(matrix.unaryExpr(&normaliseSingle))
+{
+    return matrix.unaryExpr(&normaliseSingle);
+}
+
+
+const double PI = 4 * atan(1);
 
 /**
  * Initializes Unscented Kalman filter
@@ -21,18 +32,20 @@ UKF::UKF()
     use_radar_ = true;
 
     // initial state vector
-    x_ = VectorXd(5);
-    x_.fill(0);
+    x_ << 0, 0, 0, 0, 0;
 
     // initial covariance matrix
-    P_ = MatrixXd(5, 5);
-    P_.fill(0);
+    P_ << 10, 0, 0, 0, 0,
+          0, 10, 0, 0, 0,
+          0, 0, 10, 0, 0,
+          0, 0, 0, 0.01, 0,
+          0, 0, 0, 0, 0.01;
 
     // Process noise standard deviation longitudinal acceleration in m/s^2
-    std_a_ = 30;
+    std_a_ = 0.3;
 
     // Process noise standard deviation yaw acceleration in rad/s^2
-    std_yawdd_ = 30;
+    std_yawdd_ = 0.01;
 
     // Laser measurement noise standard deviation position1 in m
     std_laspx_ = 0.15;
@@ -41,24 +54,27 @@ UKF::UKF()
     std_laspy_ = 0.15;
 
     // Radar measurement noise standard deviation radius in m
-    std_radr_ = 0.3;
+    std_radr_ = 0.01;
 
     // Radar measurement noise standard deviation angle in rad
-    std_radphi_ = 0.03;
+    std_radphi_ = 0.01;
 
     // Radar measurement noise standard deviation radius change in m/s
-    std_radrd_ = 0.3;
+    std_radrd_ = 0.003;
 
-    lambda_ = 3 - N_AUG;
+    lambda_ = 3.0 - N_AUG;
     Xsig_pred_.fill(0);
-    weights_.setConstant(1 / (lambda_ + N_AUG) / 2.0);
+    weights_.fill(1.0 / (lambda_ + N_AUG) / 2.0);
     weights_(0) = lambda_ / (lambda_ + N_AUG);
+    std::cout << "weights\n" << weights_ << std::endl;
+    std::cout << "sum " << weights_.sum() << std::endl;
 
     time_us_ = 0;
 }
 
 UKF::~UKF()
 {}
+
 
 /**
  * @param {MeasurementPackage} meas_package The latest measurement data of
@@ -69,20 +85,37 @@ void UKF::ProcessMeasurement(MeasurementPackage meas_package)
     if (time_us_ == 0)
     {
         time_us_ = meas_package.timestamp_;
+        if (meas_package.sensor_type_ == MeasurementPackage::RADAR)
+        {
+            /**
+            Convert radar from polar to cartesian coordinates and initialize state.
+            */
+            double r = meas_package.raw_measurements_(0);
+            double phi = meas_package.raw_measurements_(1);
+//            x_ << 10, 10, 100, 0, 0;
+            x_ << r * cos(phi), r * sin(phi), 0, 0, 0;
+        }
+        else if (meas_package.sensor_type_ == MeasurementPackage::LASER)
+        {
+            x_ << meas_package.raw_measurements_(
+                0), meas_package.raw_measurements_(1), 0, 0, 0;
+//            x_ << 0, 10, 1, atan(1), 0.1;
+
+        }
         return;
     }
 
-    double dt = (meas_package.timestamp_ - time_us_) / 1e6;
-    time_us_ = meas_package.timestamp_;
-    Prediction(dt);
+
     if (meas_package.sensor_type_ == MeasurementPackage::RADAR)
     {
+        double dt = (meas_package.timestamp_ - time_us_) / 1e6;
+        time_us_ = meas_package.timestamp_;
+        Prediction(dt);
         UpdateRadar(meas_package);
     }
 }
 
-
-VectorD<N_X> UKF::ProcessModel(VectorD<N_AUG> x, double dt)
+VectorD<UKF::N_X> UKF::ProcessModel(VectorD<N_AUG> x, double dt)
 {
     VectorD<N_X> x_updated(5);
     double dt2_2 = dt * dt / 2.0;
@@ -103,6 +136,7 @@ VectorD<N_X> UKF::ProcessModel(VectorD<N_AUG> x, double dt)
 
     double delta_phi = phi_dot * dt;
     x_updated(3) += delta_phi;
+    x_updated(3) = fmod(x_updated(3) + M_PI, 2 * M_PI) - M_PI;
     if (fabs(phi_dot) >= 0.000001)
     {
         double v_on_phi_dot = v / phi_dot;
@@ -111,7 +145,6 @@ VectorD<N_X> UKF::ProcessModel(VectorD<N_AUG> x, double dt)
     }
     else
     {
-        std::cout << phi_dot << std::endl;
         x_updated(0) += v * cos_phi * dt;
         x_updated(1) += v * sin_phi * dt;
     }
@@ -134,7 +167,7 @@ MatrixD<UKF::N_AUG> UKF::AugmentStateCovariance(MatrixD<N_X> P)
 {
     //create augmented covariance matrix
     MatrixD<N_AUG> P_aug;
-    P_aug.fill(0);
+    P_aug.fill(0.0);
     P_aug.topLeftCorner<N_X, N_X>() = P_;
     P_aug(N_X, N_X) = std_a_ * std_a_;
     P_aug(N_X + 1, N_X + 1) = std_yawdd_ * std_yawdd_;
@@ -142,20 +175,22 @@ MatrixD<UKF::N_AUG> UKF::AugmentStateCovariance(MatrixD<N_X> P)
     return P_aug;
 }
 
-MatrixD<UKF::N_AUG, 2 * UKF::N_X + 1> UKF::AugmentedSamplePoints(VectorD<N_AUG> x_aug, MatrixD<N_AUG> P_aug)
+MatrixD<UKF::N_AUG, 2 * UKF::N_AUG + 1>
+UKF::AugmentedSamplePoints(VectorD<N_AUG> x_aug, MatrixD<N_AUG> P_aug)
 {
     //create square root matrix
     MatrixD<N_AUG> A = P_aug.llt().matrixL();
     //create augmented sigma points
-    MatrixD<N_AUG, 2 * N_X + 1> Xsig_aug;
+    MatrixD<N_AUG, 2 * N_AUG + 1> Xsig_aug;
     Xsig_aug.col(0) = x_aug;
     double scale = sqrt(lambda_ + N_AUG);
-    for (size_t i = 0; i < N_X; ++i)
+    for (size_t i = 0; i < N_AUG; ++i)
     {
         VectorD<N_AUG> col = A.col(i);
         Xsig_aug.col(i + 1) = x_aug + scale * col;
-        Xsig_aug.col(i + 1 + N_X) = x_aug - scale * col;
+        Xsig_aug.col(i + 1 + N_AUG) = x_aug - scale * col;
     }
+    Xsig_aug.row(3) = normalise(Xsig_aug.row(3));
     return Xsig_aug;
 }
 
@@ -174,33 +209,45 @@ void UKF::Prediction(double delta_t)
     */
 
     auto x_aug = AugmentStateVector(x_);
+//    std::cout << "x_aug\n" << x_aug << std::endl;
     auto P_aug = AugmentStateCovariance(P_);
+//    std::cout << "P_aug\n" << P_aug << std::endl;
     auto Xsig_aug = AugmentedSamplePoints(x_aug, P_aug);
+//    std::cout << "Xsig_aug\n" << Xsig_aug << std::endl;
 
-    for(size_t i = 0; i < Xsig_pred_.cols(); ++i)
+    for (size_t i = 0; i < Xsig_pred_.cols(); ++i)
     {
         Xsig_pred_.col(i) = ProcessModel(Xsig_aug.col(i), delta_t);
     }
 
-    //predict state mean
-    x_ = Xsig_pred_ * weights_;
+    // predict state mean
+    x_  = Xsig_pred_ * weights_;
+    x_(3) = normaliseSingle(x_(3));
+
     //predict state covariance matrix
-    Matrix<double, N_X, 2 * N_X + 1> err = Xsig_pred_.colwise() - x_;
-    Matrix<double, N_X, 2 * N_X + 1> weightedErr = err.array().rowwise() * weights_.transpose().array();
+    Matrix<double, N_X, 2 * N_AUG + 1> err = Xsig_pred_.colwise() - x_;
+    err.row(3) = normalise(err.row(3));
+    Matrix<double, N_X, 2 * N_AUG + 1> weightedErr =
+        err.array().rowwise() * weights_.transpose().array();
 
     P_ = weightedErr * err.transpose();
 }
 
-void UKF::KalmanUpdate(MatrixXd S, MatrixXd Zsig_pred, VectorXd z_pred, VectorXd z)
+void
+UKF::KalmanUpdate(MatrixXd S, MatrixXd Zsig_diff, VectorXd z_diff)
 {
-    MatrixD<N_X, 2 * N_X + 1> stateError = Xsig_pred_.colwise() - x_;
-    MatrixD<N_X, 2 * N_X + 1> weighedStateError = stateError.array().rowwise() * weights_.transpose().array();
-    MatrixXd measurementError = Zsig_pred.colwise() - z_pred;
-    MatrixXd Tc = weighedStateError * measurementError.transpose();
+    MatrixD<N_X, 2 * N_AUG + 1> stateError = Xsig_pred_.colwise() - x_;
+    stateError.row(3) = normalise(stateError.row(3));
+    MatrixD<N_X, 2 * N_AUG + 1> weighedStateError =
+        stateError.array().rowwise() * weights_.transpose().array();
+
+    MatrixXd Tc = weighedStateError * Zsig_diff.transpose();
+    std::cout << "Tc" << Tc << std::endl;
 
     MatrixXd K = Tc * S.inverse();
-    x_ += K * (z - z_pred);
-    P_ += - K * S * K.transpose();
+    std::cout << "K" << K << std::endl;
+    x_ += K * z_diff;
+    P_ += -K * S * K.transpose();
 }
 
 /**
@@ -225,38 +272,47 @@ void UKF::UpdateLidar(MeasurementPackage meas_package)
  */
 void UKF::UpdateRadar(MeasurementPackage meas_package)
 {
-    using SigmaRow = Eigen::Matrix<double, 1, 2 * N_X + 1>;
+    using SigmaRow = Eigen::Matrix<double, 1, 2 * N_AUG + 1>;
     SigmaRow px = Xsig_pred_.row(0);
     SigmaRow py = Xsig_pred_.row(1);
     SigmaRow v = Xsig_pred_.row(2);
     SigmaRow phi = Xsig_pred_.row(3);
-    SigmaRow phidot = Xsig_pred_.row(4);
+    //SigmaRow phidot = Xsig_pred_.row(4);
 
-    SigmaRow rho = (px.cwiseProduct(py) + py.cwiseProduct(py)).array().sqrt();
-    MatrixD<3, 2 * N_X + 1> Zsig_pred;
+    SigmaRow rho = (px.cwiseProduct(px) + py.cwiseProduct(py)).array().sqrt();
+    MatrixD<3, 2 * N_AUG + 1> Zsig_pred;
     if ((rho.cwiseAbs().array() <= 0.0001).any())
     {
         return;
     }
     Zsig_pred.row(0) = rho;
-    Zsig_pred.row(1) = py.binaryExpr(px, [] (double y, double x) { return atan2(y, x); });
-    Zsig_pred.row(2) = (px.array() * phi.array().cos() + py.array() * phi.array().sin())
-                       * v.array()
-                       / rho.array();
+    Zsig_pred.row(1) = py.binaryExpr(px, [](double y, double x) {
+        return atan2(y, x);
+    });
+    Zsig_pred.row(2) =
+        (px.array() * phi.array().cos() + py.array() * phi.array().sin())
+        * v.array()
+        / rho.array();
 
     VectorD<3> z_pred;
     z_pred = Zsig_pred * weights_;
+    z_pred(1) = normaliseSingle(z_pred(1));
     //predict state covariance matrix
     VectorD<3> R;
     R <<
       std_radr_ * std_radr_,
         std_radphi_ * std_radphi_,
         std_radrd_ * std_radrd_;
-    MatrixD<3, 2 * N_X + 1> err = Zsig_pred.colwise() - z_pred;
-    MatrixD<3, 2 * N_X + 1> weightedErr = err.array().rowwise() * weights_.transpose().array();
+    MatrixD<3, 2 * N_AUG + 1> Zsig_err = Zsig_pred.colwise() - z_pred;
+    Zsig_err.row(1) = normalise(Zsig_err.row(1));
+    MatrixD<3, 2 * N_AUG + 1> weightedErr =
+        Zsig_err.array().rowwise() * weights_.transpose().array();
 
-    weightedErr += R.asDiagonal();
-    MatrixD<3, 3> S = weightedErr * err.transpose();
+    MatrixD<3, 3> S = weightedErr * Zsig_err.transpose();
+    S += R.asDiagonal();
 
-    KalmanUpdate(S, Zsig_pred, z_pred, meas_package.raw_measurements_);
+    VectorD<3> z_err = meas_package.raw_measurements_ - z_pred;
+    z_err(1) = normaliseSingle(z_err(1));
+
+    KalmanUpdate(S, Zsig_err, z_err);
 }

@@ -38,7 +38,7 @@ public:
     MatrixD<N_X> P_;
 
     ///* predicted sigma points matrix
-    MatrixD<N_X, 2 * N_X + 1> Xsig_pred_;
+    MatrixD<N_X, 2 * N_AUG + 1> Xsig_pred_;
 
     ///* time when the state is true, in us
     long long time_us_;
@@ -65,7 +65,7 @@ public:
     double std_radrd_;
 
     ///* Weights of sigma points
-    VectorD<2 * N_X + 1> weights_;
+    VectorD<2 * N_AUG + 1> weights_;
 
     ///* Sigma point spreading parameter
     double lambda_;
@@ -95,10 +95,10 @@ public:
 
     MatrixD<N_AUG> AugmentStateCovariance(MatrixD<N_X> P);
 
-    MatrixD<N_AUG, 2 * N_X + 1>
+    MatrixD<N_AUG, 2 * N_AUG + 1>
     AugmentedSamplePoints(VectorD<N_AUG> x, MatrixD<N_AUG> P_aug);
 
-    void KalmanUpdate(MatrixXd S, MatrixXd Zsig_pred, VectorXd z_pred, VectorXd z);
+    void KalmanUpdate(MatrixXd S, MatrixXd Zsig_diff, VectorXd z_diff);
 
     /**
      * ProcessMeasurement
