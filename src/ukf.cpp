@@ -3,6 +3,7 @@
 
 using namespace std;
 using Eigen::Matrix;
+using Eigen::MatrixBase;
 
 using std::vector;
 
@@ -16,6 +17,27 @@ auto normalise(const T& matrix) -> decltype(matrix.unaryExpr(&normaliseSingle))
 {
     return matrix.unaryExpr(&normaliseSingle);
 }
+
+
+template<int R, int C>
+VectorD<R> applyWeights(VectorD<C> weights, MatrixD<R, C> matrix)
+{
+    return matrix * weights;
+};
+
+
+template<int N, int M1, int M2>
+MatrixD<M1, M2> applyWeightedProduct(VectorD<N> weights, MatrixD<M1, N> a, MatrixD<N, M2> b) {
+    MatrixD<M1, N> weighted = a.array().rowwise() * weights.transpose().array();
+    return weighted * b;
+};
+
+
+template<int R, int C>
+MatrixD<R, R> applyWeightedProduct(VectorD<C> weights, MatrixD<R, C> matrix) {
+    MatrixD<C, R> transposed = matrix.transpose();
+    return applyWeightedProduct(weights, matrix, transposed);
+};
 
 
 const double PI = 4 * atan(1);
@@ -38,14 +60,14 @@ UKF::UKF()
     P_ << 10, 0, 0, 0, 0,
           0, 10, 0, 0, 0,
           0, 0, 10, 0, 0,
-          0, 0, 0, 0.01, 0,
-          0, 0, 0, 0, 0.01;
+          0, 0, 0, 1.0, 0,
+          0, 0, 0, 0, 1.0;
 
     // Process noise standard deviation longitudinal acceleration in m/s^2
-    std_a_ = 0.3;
+    std_a_ = 1.0;
 
     // Process noise standard deviation yaw acceleration in rad/s^2
-    std_yawdd_ = 0.01;
+    std_yawdd_ = 1.0;
 
     // Laser measurement noise standard deviation position1 in m
     std_laspx_ = 0.15;
@@ -106,12 +128,16 @@ void UKF::ProcessMeasurement(MeasurementPackage meas_package)
     }
 
 
+    double dt = (meas_package.timestamp_ - time_us_) / 1e6;
+    time_us_ = meas_package.timestamp_;
+    Prediction(dt);
     if (meas_package.sensor_type_ == MeasurementPackage::RADAR)
     {
-        double dt = (meas_package.timestamp_ - time_us_) / 1e6;
-        time_us_ = meas_package.timestamp_;
-        Prediction(dt);
         UpdateRadar(meas_package);
+    }
+    else
+    {
+        UpdateLidar(meas_package);
     }
 }
 
@@ -136,8 +162,7 @@ VectorD<UKF::N_X> UKF::ProcessModel(VectorD<N_AUG> x, double dt)
 
     double delta_phi = phi_dot * dt;
     x_updated(3) += delta_phi;
-    x_updated(3) = fmod(x_updated(3) + M_PI, 2 * M_PI) - M_PI;
-    if (fabs(phi_dot) >= 0.000001)
+    if(fabs(phi_dot) >= 0.000001)
     {
         double v_on_phi_dot = v / phi_dot;
         x_updated(0) += v_on_phi_dot * (sin(phi + delta_phi) - sin(phi));
@@ -145,10 +170,12 @@ VectorD<UKF::N_X> UKF::ProcessModel(VectorD<N_AUG> x, double dt)
     }
     else
     {
+        std::cout << phi_dot << std::endl;
         x_updated(0) += v * cos_phi * dt;
         x_updated(1) += v * sin_phi * dt;
     }
     x_updated += x.head(5);
+    x_updated(3) = normaliseSingle(x_updated(3));
     return x_updated;
 }
 
@@ -209,11 +236,8 @@ void UKF::Prediction(double delta_t)
     */
 
     auto x_aug = AugmentStateVector(x_);
-//    std::cout << "x_aug\n" << x_aug << std::endl;
     auto P_aug = AugmentStateCovariance(P_);
-//    std::cout << "P_aug\n" << P_aug << std::endl;
     auto Xsig_aug = AugmentedSamplePoints(x_aug, P_aug);
-//    std::cout << "Xsig_aug\n" << Xsig_aug << std::endl;
 
     for (size_t i = 0; i < Xsig_pred_.cols(); ++i)
     {
@@ -221,16 +245,14 @@ void UKF::Prediction(double delta_t)
     }
 
     // predict state mean
-    x_  = Xsig_pred_ * weights_;
+    x_  = applyWeights(weights_, Xsig_pred_);
     x_(3) = normaliseSingle(x_(3));
 
     //predict state covariance matrix
-    Matrix<double, N_X, 2 * N_AUG + 1> err = Xsig_pred_.colwise() - x_;
+    MatrixD<N_X, 2 * N_AUG + 1> err = Xsig_pred_.colwise() - x_;
     err.row(3) = normalise(err.row(3));
-    Matrix<double, N_X, 2 * N_AUG + 1> weightedErr =
-        err.array().rowwise() * weights_.transpose().array();
 
-    P_ = weightedErr * err.transpose();
+    P_ = applyWeightedProduct(weights_, err);
 }
 
 void
@@ -238,10 +260,9 @@ UKF::KalmanUpdate(MatrixXd S, MatrixXd Zsig_diff, VectorXd z_diff)
 {
     MatrixD<N_X, 2 * N_AUG + 1> stateError = Xsig_pred_.colwise() - x_;
     stateError.row(3) = normalise(stateError.row(3));
-    MatrixD<N_X, 2 * N_AUG + 1> weighedStateError =
-        stateError.array().rowwise() * weights_.transpose().array();
 
-    MatrixXd Tc = weighedStateError * Zsig_diff.transpose();
+    MatrixXd Zsig_diff_t = Zsig_diff.transpose();
+    MatrixXd Tc = applyWeightedProduct((VectorXd)weights_, (MatrixXd)stateError, Zsig_diff_t);
     std::cout << "Tc" << Tc << std::endl;
 
     MatrixXd K = Tc * S.inverse();
@@ -250,20 +271,31 @@ UKF::KalmanUpdate(MatrixXd S, MatrixXd Zsig_diff, VectorXd z_diff)
     P_ += -K * S * K.transpose();
 }
 
+
+
 /**
  * Updates the state and the state covariance matrix using a laser measurement.
  * @param {MeasurementPackage} meas_package
  */
 void UKF::UpdateLidar(MeasurementPackage meas_package)
 {
-    /**
-    TODO:
+    MatrixD<2, 2 * N_AUG + 1> Zsig_pred;
+    Zsig_pred.fill(0.0);
+    Zsig_pred.row(0) = Xsig_pred_.row(0);
+    Zsig_pred.row(1) = Xsig_pred_.row(1);
 
-    Complete this function! Use lidar data to update the belief about the object's
-    position. Modify the state vector, x_, and covariance, P_.
+    VectorD<2> z_pred = applyWeights(weights_, Zsig_pred);
 
-    You'll also need to calculate the lidar NIS.
-    */
+    MatrixD<2, 2 * N_AUG + 1> Zsig_err = Zsig_pred.colwise() - z_pred;
+    MatrixD<2, 2> S = applyWeightedProduct(weights_, Zsig_err);
+
+    VectorD<2> R;
+    R <<
+      std_laspx_ * std_laspx_,
+        std_laspy_ * std_laspy_;
+    S += R.asDiagonal();
+    VectorD<2> z_err = meas_package.raw_measurements_ - z_pred;
+    KalmanUpdate(S, Zsig_err, z_err);
 }
 
 /**
@@ -295,7 +327,7 @@ void UKF::UpdateRadar(MeasurementPackage meas_package)
         / rho.array();
 
     VectorD<3> z_pred;
-    z_pred = Zsig_pred * weights_;
+    z_pred = applyWeights(weights_, Zsig_pred);
     z_pred(1) = normaliseSingle(z_pred(1));
     //predict state covariance matrix
     VectorD<3> R;
@@ -305,10 +337,8 @@ void UKF::UpdateRadar(MeasurementPackage meas_package)
         std_radrd_ * std_radrd_;
     MatrixD<3, 2 * N_AUG + 1> Zsig_err = Zsig_pred.colwise() - z_pred;
     Zsig_err.row(1) = normalise(Zsig_err.row(1));
-    MatrixD<3, 2 * N_AUG + 1> weightedErr =
-        Zsig_err.array().rowwise() * weights_.transpose().array();
 
-    MatrixD<3, 3> S = weightedErr * Zsig_err.transpose();
+    MatrixD<3, 3> S = applyWeightedProduct(weights_, Zsig_err);
     S += R.asDiagonal();
 
     VectorD<3> z_err = meas_package.raw_measurements_ - z_pred;

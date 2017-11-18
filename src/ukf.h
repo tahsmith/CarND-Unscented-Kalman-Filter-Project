@@ -10,10 +10,10 @@
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
 using Eigen::Matrix;
-template <size_t N>
+template <int N>
 using VectorD = Eigen::Matrix<double, N, 1>;
 
-template <size_t N, size_t N2=N>
+template <int N, int N2=N>
 using MatrixD = Eigen::Matrix<double, N, N2>;
 
 class UKF
