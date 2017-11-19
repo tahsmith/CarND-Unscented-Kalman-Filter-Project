@@ -5,12 +5,13 @@ using namespace std;
 using Eigen::Matrix;
 using Eigen::MatrixBase;
 
-using std::vector;
+const double PI = 4 * atan(1);
 
 double normaliseSingle(double x)
 {
-    return fmod(x + M_PI, M_PI * 2) - M_PI;
+    return fmod(x + PI, PI * 2) - PI;
 }
+
 
 template<typename T>
 auto normalise(const T& matrix) -> decltype(matrix.unaryExpr(&normaliseSingle))
@@ -39,20 +40,11 @@ MatrixD<R, R> applyWeightedProduct(VectorD<C> weights, MatrixD<R, C> matrix) {
     return applyWeightedProduct(weights, matrix, transposed);
 };
 
-
-const double PI = 4 * atan(1);
-
 /**
  * Initializes Unscented Kalman filter
  */
 UKF::UKF()
 {
-    // if this is false, laser measurements will be ignored (except during init)
-    use_laser_ = true;
-
-    // if this is false, radar measurements will be ignored (except during init)
-    use_radar_ = true;
-
     // initial state vector
     x_ << 0, 0, 0, 0, 0;
 
@@ -64,10 +56,10 @@ UKF::UKF()
           0, 0, 0, 0, 1.0;
 
     // Process noise standard deviation longitudinal acceleration in m/s^2
-    std_a_ = 1.0;
+    std_a_ = 2.0;
 
     // Process noise standard deviation yaw acceleration in rad/s^2
-    std_yawdd_ = 1.0;
+    std_yawdd_ = 2.0;
 
     // Laser measurement noise standard deviation position1 in m
     std_laspx_ = 0.15;
@@ -76,13 +68,13 @@ UKF::UKF()
     std_laspy_ = 0.15;
 
     // Radar measurement noise standard deviation radius in m
-    std_radr_ = 0.01;
+    std_radr_ = 0.3;
 
     // Radar measurement noise standard deviation angle in rad
-    std_radphi_ = 0.01;
+    std_radphi_ = 0.0175;
 
     // Radar measurement noise standard deviation radius change in m/s
-    std_radrd_ = 0.003;
+    std_radrd_ = 0.1;
 
     lambda_ = 3.0 - N_AUG;
     Xsig_pred_.fill(0);
@@ -114,14 +106,12 @@ void UKF::ProcessMeasurement(MeasurementPackage meas_package)
             */
             double r = meas_package.raw_measurements_(0);
             double phi = meas_package.raw_measurements_(1);
-//            x_ << 10, 10, 100, 0, 0;
             x_ << r * cos(phi), r * sin(phi), 0, 0, 0;
         }
         else if (meas_package.sensor_type_ == MeasurementPackage::LASER)
         {
             x_ << meas_package.raw_measurements_(
                 0), meas_package.raw_measurements_(1), 0, 0, 0;
-//            x_ << 0, 10, 1, atan(1), 0.1;
 
         }
         return;
@@ -162,7 +152,7 @@ VectorD<UKF::N_X> UKF::ProcessModel(VectorD<N_AUG> x, double dt)
 
     double delta_phi = phi_dot * dt;
     x_updated(3) += delta_phi;
-    if(fabs(phi_dot) >= 0.000001)
+    if(fabs(phi_dot) >= 0.001)
     {
         double v_on_phi_dot = v / phi_dot;
         x_updated(0) += v_on_phi_dot * (sin(phi + delta_phi) - sin(phi));
@@ -298,33 +288,33 @@ void UKF::UpdateLidar(MeasurementPackage meas_package)
     KalmanUpdate(S, Zsig_err, z_err);
 }
 
+VectorD<3> RadarPrediction(VectorD<UKF::N_X> state) {
+    auto px = state(0);
+    auto py = state(1);
+    auto v = state(2);
+    auto phi = state(3);
+    VectorD<3> prediction;
+    double rho = sqrt(px * px + py * py);
+    if (fabs(rho) <= 0.001) {
+        prediction << rho, atan2(py, px), v;
+    }
+    else {
+        prediction << rho, atan2(py, px), (px * cos(phi) + py * sin(phi)) * v / rho;
+    }
+
+    return prediction;
+}
+
 /**
  * Updates the state and the state covariance matrix using a radar measurement.
  * @param {MeasurementPackage} meas_package
  */
 void UKF::UpdateRadar(MeasurementPackage meas_package)
 {
-    using SigmaRow = Eigen::Matrix<double, 1, 2 * N_AUG + 1>;
-    SigmaRow px = Xsig_pred_.row(0);
-    SigmaRow py = Xsig_pred_.row(1);
-    SigmaRow v = Xsig_pred_.row(2);
-    SigmaRow phi = Xsig_pred_.row(3);
-    //SigmaRow phidot = Xsig_pred_.row(4);
-
-    SigmaRow rho = (px.cwiseProduct(px) + py.cwiseProduct(py)).array().sqrt();
     MatrixD<3, 2 * N_AUG + 1> Zsig_pred;
-    if ((rho.cwiseAbs().array() <= 0.0001).any())
-    {
-        return;
+    for (int i = 0; i < 2 * N_AUG + 1; ++i) {
+        Zsig_pred.col(i) = RadarPrediction(Xsig_pred_.col(i));
     }
-    Zsig_pred.row(0) = rho;
-    Zsig_pred.row(1) = py.binaryExpr(px, [](double y, double x) {
-        return atan2(y, x);
-    });
-    Zsig_pred.row(2) =
-        (px.array() * phi.array().cos() + py.array() * phi.array().sin())
-        * v.array()
-        / rho.array();
 
     VectorD<3> z_pred;
     z_pred = applyWeights(weights_, Zsig_pred);
