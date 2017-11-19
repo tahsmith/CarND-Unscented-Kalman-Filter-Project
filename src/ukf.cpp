@@ -56,16 +56,16 @@ UKF::UKF()
           0, 0, 0, 0, 1.0;
 
     // Process noise standard deviation longitudinal acceleration in m/s^2
-    std_a_ = 2.0;
+    std_a_ = 0.2;
 
     // Process noise standard deviation yaw acceleration in rad/s^2
-    std_yawdd_ = 2.0;
+    std_yawdd_ = 0.2;
 
     // Laser measurement noise standard deviation position1 in m
-    std_laspx_ = 0.15;
+    std_laspx_ = 0.10;
 
     // Laser measurement noise standard deviation position2 in m
-    std_laspy_ = 0.15;
+    std_laspy_ = 0.10;
 
     // Radar measurement noise standard deviation radius in m
     std_radr_ = 0.3;
@@ -165,7 +165,6 @@ VectorD<UKF::N_X> UKF::ProcessModel(VectorD<N_AUG> x, double dt)
         x_updated(1) += v * sin_phi * dt;
     }
     x_updated += x.head(5);
-//    x_updated(3) = normaliseSingle(x_updated(3));
     return x_updated;
 }
 
@@ -318,7 +317,7 @@ void UKF::UpdateRadar(MeasurementPackage meas_package)
     VectorD<3> z_pred;
     z_pred = applyWeights(weights_, Zsig_pred);
     z_pred(1) = normaliseSingle(z_pred(1));
-    //predict state covariance matrix
+    // predict state covariance matrix
     VectorD<3> R;
     R <<
       std_radr_ * std_radr_,
