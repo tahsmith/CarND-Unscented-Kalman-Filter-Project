@@ -31,6 +31,10 @@ public:
     ///* predicted sigma points matrix
     MatrixD<N_X, 2 * N_AUG + 1> Xsig_pred_;
 
+    MatrixD<2, 2> R_laser_;
+
+    MatrixD<3, 3> R_radar_;
+
     ///* time when the state is true, in us
     long long time_us_;
 
