@@ -165,7 +165,7 @@ VectorD<UKF::N_X> UKF::ProcessModel(VectorD<N_AUG> x, double dt)
         x_updated(1) += v * sin_phi * dt;
     }
     x_updated += x.head(5);
-    x_updated(3) = normaliseSingle(x_updated(3));
+//    x_updated(3) = normaliseSingle(x_updated(3));
     return x_updated;
 }
 
@@ -207,7 +207,6 @@ UKF::AugmentedSamplePoints(VectorD<N_AUG> x_aug, MatrixD<N_AUG> P_aug)
         Xsig_aug.col(i + 1) = x_aug + scale * col;
         Xsig_aug.col(i + 1 + N_AUG) = x_aug - scale * col;
     }
-    Xsig_aug.row(3) = normalise(Xsig_aug.row(3));
     return Xsig_aug;
 }
 
